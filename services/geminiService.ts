@@ -1,97 +1,118 @@
+import { GoogleGenerativeAI } from '@google/genai';
+import { LSXData, MotifDetail, PaletteItem } from '../types';
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { LSXData } from "../types";
+// Lấy API key từ environment variable
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+if (!API_KEY) {
+  console.error('⚠️ GEMINI_API_KEY chưa được cấu hình!');
+}
 
-export async function analyzeEmbroideryDesign(imageDataBase64: string, fabricType: string): Promise<LSXData> {
-  const model = 'gemini-3-flash-preview';
-  
-  const systemInstruction = `
-    Bạn là Chuyên gia Quản lý Sản xuất tại xưởng thêu METHEU.
-    Nhiệm vụ: Phân tích ảnh thiết kế thêu tay và xuất ra dữ liệu Lệnh sản xuất (LSX) bằng TIẾNG VIỆT hoàn toàn.
-    
-    TÍNH NĂNG TỰ NHẬN DIỆN SẢN PHẨM:
-    Xác định chính xác loại sản phẩm: Sổ tay, Mũ, Vương miện, Tạp dề, Váy, Khăn tay, Túi...
-    
-    YÊU CẦU CHI TIẾT VỀ MÀU CHỈ:
-    - Mỗi họa tiết thêu phải có mã màu DMC tương ứng.
-    - Phải cung cấp: Mã số DMC (dmcCode), Tên màu tiếng Việt (colorName) và Mã màu Hex (colorHex) để hiển thị trực quan.
-    - Ví dụ: dmcCode: "321", colorName: "Đỏ tươi", colorHex: "#C50022".
-    - Nhận diện các tông màu kim loại (Vàng, Bạc) nếu có và ghi chú sử dụng chỉ kim tuyến.
+const genAI = new GoogleGenerativeAI(API_KEY);
 
-    ĐỊNH MỨC THỜI GIAN THEO DÒNG SẢN PHẨM:
-    - Vương miện/Mũ/Khăn tay: 120 - 180 phút.
-    - Sổ tay/Tạp dề: 150 - 210 phút.
-    - Váy/Áo dài: 240 - 480 phút.
-    
-    GHI CHÚ QC:
-    - Tập trung vào độ mịn đường thêu, sự chính xác của màu sắc so với thiết kế gốc.
-    
-    ĐỊNH DẠNG ĐẦU RA: JSON tiếng Việt.
-  `;
-
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: [
-      {
-        parts: [
-          { text: `Nhận diện sản phẩm và bóc tách màu chỉ thêu chi tiết cho mẫu thêu trên vải ${fabricType}.` },
-          {
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: imageDataBase64.split(',')[1] || imageDataBase64
-            }
-          }
-        ]
-      }
-    ],
-    config: {
-      systemInstruction: systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          orderCode: { type: Type.STRING },
-          productType: { type: Type.STRING },
-          fabric: { type: Type.STRING },
-          theme: { type: Type.STRING },
-          details: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                stt: { type: Type.INTEGER },
-                motif: { type: Type.STRING },
-                technique: { type: Type.STRING },
-                dmcCode: { type: Type.STRING },
-                colorName: { type: Type.STRING },
-                colorHex: { type: Type.STRING },
-                timeMinutes: { type: Type.NUMBER },
-                technicalRequirement: { type: Type.STRING }
-              },
-              required: ["stt", "motif", "technique", "dmcCode", "colorName", "colorHex", "timeMinutes", "technicalRequirement"]
-            }
-          },
-          totalTime: { type: Type.NUMBER },
-          palette: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                code: { type: Type.STRING },
-                name: { type: Type.STRING },
-                hex: { type: Type.STRING }
-              },
-              required: ["code", "name", "hex"]
-            }
-          },
-          qcNote: { type: Type.STRING }
-        },
-        required: ["orderCode", "productType", "fabric", "theme", "details", "totalTime", "palette", "qcNote"]
-      }
+export async function analyzeEmbroideryDesign(
+  base64Image: string,
+  fabric: string
+): Promise<LSXData> {
+  try {
+    // Kiểm tra API key
+    if (!API_KEY) {
+      throw new Error('API Key chưa được cấu hình. Vui lòng thêm GEMINI_API_KEY vào environment variables.');
     }
-  });
 
-  return JSON.parse(response.text);
+    // Loại bỏ prefix "data:image/..." nếu có
+    const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const prompt = `Bạn là chuyên gia phân tích thiết kế thêu tay cao cấp của xưởng METHEU.
+
+Phân tích hình ảnh thiết kế thêu này và trả về kết quả dạng JSON với cấu trúc sau:
+
+{
+  "orderCode": "LSX-YYYYMMDD-XXX",
+  "productType": "Tên sản phẩm (ví dụ: Áo dài, Váy, Mũ, Túi xách, Khăn tay, v.v.)",
+  "fabric": "${fabric}",
+  "theme": "Chủ đề/phong cách thiết kế",
+  "details": [
+    {
+      "stt": 1,
+      "motif": "Tên họa tiết cụ thể",
+      "technique": "Kỹ thuật thêu (Mũi xích, Mũi phẳng, Mũi thập, v.v.)",
+      "dmcCode": "DMC XXX",
+      "colorName": "Tên màu bằng tiếng Việt",
+      "colorHex": "#XXXXXX",
+      "timeMinutes": số phút ước tính,
+      "technicalRequirement": "Yêu cầu kỹ thuật chi tiết"
+    }
+  ],
+  "totalTime": tổng thời gian (phút),
+  "palette": [
+    {
+      "code": "DMC XXX",
+      "name": "Tên màu",
+      "hex": "#XXXXXX"
+    }
+  ],
+  "qcNote": "Ghi chú kiểm tra chất lượng"
+}
+
+QUAN TRỌNG:
+- Phân tích kỹ từng chi tiết trong thiết kế
+- Đề xuất kỹ thuật thêu phù hợp với từng họa tiết
+- Ước tính thời gian thực tế dựa trên độ phức tạp
+- Chọn mã màu DMC chính xác
+- Đưa ra yêu cầu kỹ thuật cụ thể cho nghệ nhân
+- Tạo mã LSX theo format: LSX-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}
+
+Chỉ trả về JSON thuần túy, KHÔNG có markdown, KHÔNG có giải thích thêm.`;
+
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: cleanBase64
+        }
+      }
+    ]);
+
+    const response = await result.response;
+    const text = response.text();
+    
+    console.log('📥 Response từ Gemini:', text);
+
+    // Parse JSON từ response
+    const cleanText = text
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .trim();
+
+    const data: LSXData = JSON.parse(cleanText);
+
+    // Validate dữ liệu
+    if (!data.details || data.details.length === 0) {
+      throw new Error('Không phát hiện được chi tiết họa tiết trong thiết kế');
+    }
+
+    return data;
+
+  } catch (error: any) {
+    console.error('❌ Lỗi phân tích:', error);
+    
+    // Xử lý các loại lỗi cụ thể
+    if (error.message?.includes('API key')) {
+      throw new Error('API Key không hợp lệ hoặc chưa được cấu hình');
+    }
+    
+    if (error.message?.includes('quota')) {
+      throw new Error('Đã vượt quá giới hạn API. Vui lòng thử lại sau.');
+    }
+
+    if (error instanceof SyntaxError) {
+      throw new Error('Không thể phân tích dữ liệu trả về từ AI. Vui lòng thử lại.');
+    }
+
+    throw new Error(error.message || 'Không thể phân tích thiết kế. Vui lòng thử lại với ảnh rõ hơn.');
+  }
 }
