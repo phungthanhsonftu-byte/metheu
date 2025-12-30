@@ -1,0 +1,7 @@
+{
+  "name": "Copy of METHEU LSX Manager",
+  "description": "Hệ thống tự động xuất Lệnh sản xuất (LSX) thêu tay cho xưởng METHEU dựa trên phân tích hình ảnh AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
